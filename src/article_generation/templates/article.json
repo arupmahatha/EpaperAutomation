@@ -1,0 +1,11 @@
+{
+    "article_id": "{{ article_id }}",
+    "title": "{{ title }}",
+    "content": {{ content|tojson }},
+    "date": "{{ date }}",
+    "author": "{{ author }}",
+    "source": "{{ source }}",
+    "language": "{{ language }}",
+    "image_url": "{{ image_url }}",
+    "available_languages": {{ available_languages|tojson }}
+}

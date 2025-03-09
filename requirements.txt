@@ -1,0 +1,8 @@
+numpy>=1.20.0
+opencv-python>=4.5.0
+pdf2image>=1.16.0
+pytesseract>=0.3.8
+langdetect>=1.0.9
+requests>=2.25.1
+jinja2>=3.0.0
+pillow>=8.0.0 
