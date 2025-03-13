@@ -175,3 +175,6 @@ Sample_PDFs/
 
 # Ignore the QURK directory
 QURK/
+
+# Ignore the output directory
+output/
