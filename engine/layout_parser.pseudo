@@ -1,0 +1,318 @@
+CLASS Region
+    bbox: tuple (x0, y0, x1, y1)
+    content: string (optional)
+
+CLASS RegionLayoutParser
+    CONSTRUCTOR(pdf_path)
+        pdf_path = input_path
+        regions = empty_list
+
+    METHOD parse_page(page_number = 0)
+        OPEN pdf_file
+        GET page[page_number]
+        regions = empty_list
+
+        # Extract words and group them into article regions
+        words = EXTRACT_WORDS(page)
+        PROCESS_ARTICLE_REGIONS(words)
+
+        RETURN regions
+
+    METHOD _process_article_regions(words)
+        # Initialize variables for grouping words into article blocks
+        current_block = empty_list
+        current_y = null
+        y_threshold = 15 pixels  # vertical proximity threshold
+        x_threshold = 100 pixels  # horizontal proximity threshold
+        
+        # Sort words by position (top to bottom, left to right)
+        sorted_words = SORT_WORDS(words, by=(top, x0))
+        
+        FOR each word IN sorted_words
+            IF current_y IS null
+                current_y = word.top
+                ADD word TO current_block
+            ELSE IF (|word.top - current_y| <= y_threshold AND 
+                    (current_block IS empty OR 
+                     |word.x0 - last_word.x1| <= x_threshold))
+                ADD word TO current_block
+                current_y = AVERAGE(current_y, word.top)
+            ELSE
+                # Process current block if it exists
+                IF current_block NOT empty
+                    x0 = MIN(word.x0 FOR word IN current_block)
+                    y0 = MIN(word.top FOR word IN current_block)
+                    x1 = MAX(word.x1 FOR word IN current_block)
+                    y1 = MAX(word.bottom FOR word IN current_block)
+                    text = JOIN_WORDS(current_block)
+                    
+                    # Only create region if enough words
+                    IF WORD_COUNT(text) > 5
+                        CREATE new Region(
+                            bbox = (x0, y0, x1, y1),
+                            content = text
+                        )
+                        ADD TO regions
+                    END IF
+                END IF
+                
+                current_block = [word]
+                current_y = word.top
+            END IF
+        END FOR
+        
+        # Process final block
+        IF current_block NOT empty
+            x0 = MIN(word.x0 FOR word IN current_block)
+            y0 = MIN(word.top FOR word IN current_block)
+            x1 = MAX(word.x1 FOR word IN current_block)
+            y1 = MAX(word.bottom FOR word IN current_block)
+            text = JOIN_WORDS(current_block)
+            
+            IF WORD_COUNT(text) > 5
+                CREATE new Region(
+                    bbox = (x0, y0, x1, y1),
+                    content = text
+                )
+                ADD TO regions
+            END IF
+        END IF
+
+    METHOD visualize_regions(output_path, page_number = 0)
+        OPEN pdf_file
+        GET page[page_number]
+        width = page.width
+        height = page.height
+
+        # Create visualization
+        CREATE new Image(width, height, white)
+        CREATE new ImageDraw
+
+        # Draw regions
+        FOR each region IN regions
+            DRAW rectangle(region.bbox, color='blue', width=2)
+            
+            IF region.content EXISTS
+                preview = TRUNCATE(region.content, 50) + "..."
+                DRAW text(region.bbox[0], region.bbox[1] - 10,
+                         preview,
+                         color='blue')
+            END IF
+        END FOR
+
+        # Scale and save visualization
+        scale_factor = 2
+        new_size = (width * scale_factor, height * scale_factor)
+        RESIZE image(new_size)
+        SAVE image(output_path)
+
+USAGE EXAMPLE
+============
+parser = RegionLayoutParser("path/to/pdf")
+regions = parser.parse_page(0)
+parser.visualize_regions("output_articles.png")
+
+KEY FEATURES
+===========
+1. Article Detection:
+   - Groups words into coherent article blocks
+   - Uses both vertical and horizontal proximity
+   - Minimum word count filtering (>5 words)
+   - Maintains reading order (top-to-bottom, left-to-right)
+
+2. Region Properties:
+   - Precise bounding box coordinates
+   - Complete article text content
+   - Smart text grouping based on layout
+
+3. Visualization:
+   - Blue bounding boxes for articles
+   - Content previews
+   - Scaled output for better visibility
+
+4. Error Handling:
+   - Page number validation
+   - File access error handling
+   - Region processing error handling
+
+EXTENSIONS POSSIBLE
+=================
+1. Advanced Article Analysis:
+   - Headline detection
+   - Article categorization
+   - Language detection
+   - Sentiment analysis
+
+2. Layout Analysis:
+   - Column detection
+   - Page segmentation
+   - Article continuation detection
+   - Reading order optimization
+
+3. Content Processing:
+   - Named entity recognition
+   - Topic modeling
+   - Summary generation
+   - Keyword extraction
+
+4. Enhanced Visualization:
+   - Interactive viewing
+   - Article highlighting
+   - Export to structured formats
+   - Custom styling options
+
+CLASS LayoutParser
+    CONSTRUCTOR(pdf_path)
+        pdf_path = input_path
+
+    METHOD analyze_page(page_number = 0, display = True, output_path = None)
+        # Extract elements using pdfplumber
+        OPEN pdf_file WITH pdfplumber
+        GET page[page_number]
+        width = page.width
+        height = page.height
+        
+        # Create transparent visualization canvas
+        CREATE new Image(width, height, transparent)
+        CREATE new ImageDraw
+        
+        # Extract and process elements
+        elements = EXTRACT_ELEMENTS(page, draw)
+        
+        # Generate output path if not provided
+        IF output_path IS null
+            output_path = REPLACE_EXTENSION(pdf_path, '_analyzed.pdf')
+        
+        # Overlay visualization on PDF
+        OVERLAY_ON_PDF(visualization_image, page_number, output_path)
+        
+        IF display
+            DISPLAY_PDF(output_path)
+        
+        RETURN elements, output_path
+
+    METHOD _extract_elements(page, draw)
+        elements = {
+            'words': [],
+            'tables': [],
+            'images': []
+        }
+        
+        # Process Words with semi-transparent blue
+        words = EXTRACT_WORDS(page)
+        FOR each word IN words
+            GET word_bbox(x0, y0, x1, y1)
+            DRAW blue_rectangle(word_bbox, opacity=0.5)
+            ADD word TO elements['words']
+        
+        # Process Tables with semi-transparent red
+        tables = FIND_TABLES(page)
+        FOR each table IN tables
+            GET table_bbox
+            DRAW red_rectangle(table_bbox, opacity=0.5)
+            ADD table TO elements['tables']
+        
+        # Process Images with semi-transparent green
+        images = GET_IMAGES(page)
+        FOR each image IN images
+            CALCULATE image_bbox(x0, y0, x1, y1)
+            DRAW green_rectangle(image_bbox, opacity=0.5)
+            ADD image TO elements['images']
+        
+        RETURN elements
+
+    METHOD _overlay_on_pdf(visualization_image, page_number, output_path)
+        # Convert visualization to PNG bytes
+        CREATE BytesIO buffer
+        SAVE visualization_image AS PNG to buffer
+        
+        # Open PDF with PyMuPDF
+        OPEN pdf_file
+        GET page[page_number]
+        
+        # Add semi-transparent white overlay to reduce brightness
+        CREATE new_shape ON page
+        DRAW rectangle(page.rect)
+        FINISH shape(color=white, fill=white, fill_opacity=0.2)
+        COMMIT shape
+        
+        # Insert visualization image
+        CREATE rect(0, 0, page.width, page.height)
+        INSERT_IMAGE(rect, png_buffer)
+        
+        # Save and close
+        SAVE pdf TO output_path
+        CLOSE pdf
+
+    METHOD _display_pdf(pdf_path)
+        # Get operating system
+        system = GET_SYSTEM_TYPE()
+        
+        TRY
+            IF system IS 'darwin'  # macOS
+                RUN 'open' WITH pdf_path
+            ELSE IF system IS 'linux'
+                RUN 'xdg-open' WITH pdf_path
+            ELSE IF system IS 'windows'
+                RUN 'start' WITH pdf_path
+        CATCH error
+            PRINT "Could not open PDF: " + error
+
+KEY FEATURES
+===========
+1. Element Detection:
+   - Word-level text extraction with semi-transparent blue highlighting
+   - Table structure detection with semi-transparent red highlighting
+   - Image region identification with semi-transparent green highlighting
+   - Bounding box calculation for all elements
+
+2. PDF Modification:
+   - Direct PDF modification instead of separate image
+   - Semi-transparent white overlay for brightness reduction
+   - Overlay of element visualization on original PDF
+   - Preservation of PDF structure
+
+3. Visualization:
+   - Color-coded element highlighting with transparency
+   - Blue: Words (opacity 50%)
+   - Red: Tables (opacity 50%)
+   - Green: Images (opacity 50%)
+   - PDF output with original content visible
+
+4. Error Handling:
+   - File validation
+   - Page bounds checking
+   - Resource cleanup
+   - Cross-platform PDF viewing
+
+ELEMENT PROPERTIES
+================
+1. Words:
+   - x0, y0: Top-left coordinates
+   - x1, y1: Bottom-right coordinates
+   - text: Actual word content
+   - Semi-transparent blue highlighting
+
+2. Tables:
+   - bbox: Bounding box coordinates
+   - Semi-transparent red highlighting
+   - Table structure preservation
+
+3. Images:
+   - x0, y0: Top-left position
+   - width, height: Dimensions
+   - Semi-transparent green highlighting
+
+USAGE EXAMPLE
+============
+parser = LayoutParser("document.pdf")
+elements, output_pdf = parser.analyze_page(
+    page_number=0,
+    display=True,
+    output_path="analyzed_document.pdf"
+)
+
+# Access elements
+words = elements['words']
+tables = elements['tables']
+images = elements['images'] 
