@@ -16,13 +16,18 @@ class NewspaperArticleSegmenter:
     
     def __init__(self, 
                 output_dir: str = "output",
-                temp_dir: str = "temp"):
+                temp_dir: str = "temp",
+                min_area_ratio: float = 0.01,
+                max_area_ratio: float = 0.85):  # Maximum area ratio to avoid full-page detection
         """
         Initialize the newspaper article segmenter
         
         Args:
             output_dir: Directory to save results
             temp_dir: Directory for temporary files
+            min_area_ratio: Minimum ratio of page area for a region to be considered an article
+            max_area_ratio: Maximum ratio of page area for a region to be considered an article
+                            (prevents entire page from being detected as an article)
         """
         # Create directories if they don't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -30,6 +35,8 @@ class NewspaperArticleSegmenter:
         
         self.output_dir = output_dir
         self.temp_dir = temp_dir
+        self.min_area_ratio = min_area_ratio
+        self.max_area_ratio = max_area_ratio
     
     def process_pdf(self, pdf_path: str) -> str:
         """
@@ -131,10 +138,18 @@ class NewspaperArticleSegmenter:
             x1 = x0 + img_obj['width']
             y1 = y0 + img_obj['height']
             
-            # Skip very small regions (likely not articles)
+            # Calculate area ratios
             area = (x1 - x0) * (y1 - y0)
             page_area = page.width * page.height
-            if area < 0.01 * page_area:  # Skip if less than 1% of page area
+            area_ratio = area / page_area
+            
+            # Skip very small regions (likely not articles) and very large regions (likely full page)
+            if area_ratio < self.min_area_ratio or area_ratio > self.max_area_ratio:
+                continue
+                
+            # Check if it's almost covering the entire page (indicating it might be the page background)
+            page_coverage = self._calculate_page_coverage([x0, y0, x1, y1], [0, 0, page.width, page.height])
+            if page_coverage > 0.9:  # If it covers more than 90% of the page
                 continue
 
             # Create region dictionary
@@ -165,10 +180,18 @@ class NewspaperArticleSegmenter:
         for i, table in enumerate(tables):
             x0, y0, x1, y1 = table.bbox
             
-            # Skip very small regions (likely not articles)
+            # Calculate area ratios
             area = (x1 - x0) * (y1 - y0)
             page_area = page.width * page.height
-            if area < 0.01 * page_area:  # Skip if less than 1% of page area
+            area_ratio = area / page_area
+            
+            # Skip very small regions (likely not articles) and very large regions (likely full page)
+            if area_ratio < self.min_area_ratio or area_ratio > self.max_area_ratio:
+                continue
+                
+            # Check if it's almost covering the entire page
+            page_coverage = self._calculate_page_coverage([x0, y0, x1, y1], [0, 0, page.width, page.height])
+            if page_coverage > 0.9:  # If it covers more than 90% of the page
                 continue
                 
             # Create region dictionary
@@ -200,6 +223,34 @@ class NewspaperArticleSegmenter:
             draw.text((20, 15), title, fill=(255, 255, 255, 255))
         
         return article_regions
+        
+    def _calculate_page_coverage(self, region_box, page_box):
+        """
+        Calculate how much of the page the region covers
+        
+        Args:
+            region_box: [x0, y0, x1, y1] of the region
+            page_box: [x0, y0, x1, y1] of the page
+            
+        Returns:
+            Coverage ratio (0-1)
+        """
+        # Simple calculation based on bounding box coordinates
+        rx0, ry0, rx1, ry1 = region_box
+        px0, py0, px1, py1 = page_box
+        
+        # Check for edge proximity
+        left_edge_proximity = abs(rx0 - px0) / (px1 - px0)
+        right_edge_proximity = abs(rx1 - px1) / (px1 - px0)
+        top_edge_proximity = abs(ry0 - py0) / (py1 - py0)
+        bottom_edge_proximity = abs(ry1 - py1) / (py1 - py0)
+        
+        # Average proximity to all edges (lower is closer to page boundaries)
+        avg_edge_proximity = (left_edge_proximity + right_edge_proximity + 
+                             top_edge_proximity + bottom_edge_proximity) / 4
+        
+        # If avg_edge_proximity is very low, it means the region is very close to page boundaries
+        return 1 - avg_edge_proximity
 
 # Example usage
 if __name__ == "__main__":
