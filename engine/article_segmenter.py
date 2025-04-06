@@ -6,7 +6,7 @@ try:
 except ImportError:
     from PyMuPDF import fitz  # Alternative import method
 import io
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 class NewspaperArticleSegmenter:
     """
@@ -18,7 +18,9 @@ class NewspaperArticleSegmenter:
                 output_dir: str = "output",
                 temp_dir: str = "temp",
                 min_area_ratio: float = 0.01,
-                max_area_ratio: float = 0.85):  # Maximum area ratio to avoid full-page detection
+                max_area_ratio: float = 0.85,
+                first_page_margin_percent: float = 14.5,  # Typically first page has larger header
+                other_pages_margin_percent: float = 8.5):  # Other pages usually have smaller headers
         """
         Initialize the newspaper article segmenter
         
@@ -28,6 +30,8 @@ class NewspaperArticleSegmenter:
             min_area_ratio: Minimum ratio of page area for a region to be considered an article
             max_area_ratio: Maximum ratio of page area for a region to be considered an article
                             (prevents entire page from being detected as an article)
+            first_page_margin_percent: Percentage of the top of the first page to ignore
+            other_pages_margin_percent: Percentage of the top of other pages to ignore
         """
         # Create directories if they don't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -37,6 +41,8 @@ class NewspaperArticleSegmenter:
         self.temp_dir = temp_dir
         self.min_area_ratio = min_area_ratio
         self.max_area_ratio = max_area_ratio
+        self.first_page_margin_percent = first_page_margin_percent
+        self.other_pages_margin_percent = other_pages_margin_percent
     
     def process_pdf(self, pdf_path: str) -> str:
         """
@@ -77,7 +83,7 @@ class NewspaperArticleSegmenter:
                     draw = ImageDraw.Draw(viz_img)
                     
                     # Extract article regions (as images)
-                    article_regions = self._extract_article_regions(page_plumber, draw)
+                    article_regions = self._extract_article_regions(page_plumber, draw, is_first_page=(page_num == 0))
                     
                     # Convert PIL image to bytes
                     img_bytes = io.BytesIO()
@@ -112,13 +118,14 @@ class NewspaperArticleSegmenter:
         print(f"Analysis complete! Saved to: {output_path}")
         return output_path
     
-    def _extract_article_regions(self, page, draw) -> List[Dict[str, Any]]:
+    def _extract_article_regions(self, page, draw, is_first_page: bool = False) -> List[Dict[str, Any]]:
         """
         Extract article regions from a page using pdfplumber.
         
         Args:
             page: pdfplumber page object
             draw: PIL ImageDraw object for visualization
+            is_first_page: Whether this is the first page of the newspaper
             
         Returns:
             List of article regions with coordinates
@@ -129,6 +136,20 @@ class NewspaperArticleSegmenter:
         debug_dir = os.path.join(self.temp_dir, "debug")
         os.makedirs(debug_dir, exist_ok=True)
         
+        # Calculate top margin to ignore based on whether it's first page or not
+        if is_first_page:
+            margin_percent = self.first_page_margin_percent
+            margin_label = "First page"
+        else:
+            margin_percent = self.other_pages_margin_percent
+            margin_label = "Other page"
+            
+        top_margin = page.height * (margin_percent / 100)
+        
+        # Draw a line showing the top margin that's being ignored
+        draw.line([(0, top_margin), (page.width, top_margin)], fill=(255, 0, 0, 180), width=2)
+        draw.text((10, top_margin - 20), f"{margin_label}: Ignoring top {margin_percent}%", fill=(255, 0, 0, 255))
+        
         # Get all images from the page (newspaper articles are often detected as images)
         images = page.images
         
@@ -137,6 +158,14 @@ class NewspaperArticleSegmenter:
             x0, y0 = img_obj['x0'], img_obj['top']
             x1 = x0 + img_obj['width']
             y1 = y0 + img_obj['height']
+            
+            # Skip regions that are entirely in the top margin
+            if y1 <= top_margin:
+                continue
+                
+            # For regions that partially overlap with the top margin, adjust them
+            if y0 < top_margin:
+                y0 = top_margin
             
             # Calculate area ratios
             area = (x1 - x0) * (y1 - y0)
@@ -179,6 +208,14 @@ class NewspaperArticleSegmenter:
         
         for i, table in enumerate(tables):
             x0, y0, x1, y1 = table.bbox
+            
+            # Skip regions that are entirely in the top margin
+            if y1 <= top_margin:
+                continue
+                
+            # For regions that partially overlap with the top margin, adjust them
+            if y0 < top_margin:
+                y0 = top_margin
             
             # Calculate area ratios
             area = (x1 - x0) * (y1 - y0)

@@ -73,7 +73,12 @@ class ArticleExtractor:
                     draw = ImageDraw.Draw(viz_img)
                     
                     # Use the segmenter to detect article regions
-                    article_regions = self.segmenter._extract_article_regions(page_plumber, draw)
+                    # Pass is_first_page parameter to handle different header sizes
+                    article_regions = self.segmenter._extract_article_regions(
+                        page_plumber, 
+                        draw,
+                        is_first_page=(page_num == 0)
+                    )
                     
                     # Extract and save each article
                     for idx, region in enumerate(article_regions):
