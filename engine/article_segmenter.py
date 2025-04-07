@@ -7,6 +7,7 @@ except ImportError:
     from PyMuPDF import fitz  # Alternative import method
 import io
 from typing import List, Dict, Any, Tuple
+from datetime import datetime
 
 class NewspaperArticleSegmenter:
     """
@@ -20,7 +21,8 @@ class NewspaperArticleSegmenter:
                 min_area_ratio: float = 0.01,
                 max_area_ratio: float = 0.85,
                 first_page_margin_percent: float = 14.5,  # Typically first page has larger header
-                other_pages_margin_percent: float = 8.5):  # Other pages usually have smaller headers
+                other_pages_margin_percent: float = 8.5,  # Other pages usually have smaller headers
+                base_url: str = "www.andhrajyothi.com/media/epaper-articles"):  # Base URL for article links
         """
         Initialize the newspaper article segmenter
         
@@ -32,6 +34,7 @@ class NewspaperArticleSegmenter:
                             (prevents entire page from being detected as an article)
             first_page_margin_percent: Percentage of the top of the first page to ignore
             other_pages_margin_percent: Percentage of the top of other pages to ignore
+            base_url: Base URL for generating article links
         """
         # Create directories if they don't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -43,6 +46,21 @@ class NewspaperArticleSegmenter:
         self.max_area_ratio = max_area_ratio
         self.first_page_margin_percent = first_page_margin_percent
         self.other_pages_margin_percent = other_pages_margin_percent
+        self.base_url = base_url
+        self.current_date = datetime.now().strftime("%Y/%Y%m%d")
+    
+    def _generate_article_url(self, page_num: int, article_num: int) -> str:
+        """
+        Generate URL for an article based on page number and article number
+        
+        Args:
+            page_num: Page number (1-based)
+            article_num: Article number (1-based)
+            
+        Returns:
+            Generated URL string
+        """
+        return f"https://{self.base_url}/{self.current_date}/page{page_num}-article{article_num}.jpg"
     
     def process_pdf(self, pdf_path: str) -> str:
         """
@@ -85,6 +103,24 @@ class NewspaperArticleSegmenter:
                     # Extract article regions (as images)
                     article_regions = self._extract_article_regions(page_plumber, draw, is_first_page=(page_num == 0))
                     
+                    # Update article numbers for this page
+                    for i, region in enumerate(article_regions):
+                        article_num = i + 1  # Start from 1 for each page
+                        region['label'] = f'article_{article_num}'
+                        region['url'] = self._generate_article_url(page_num + 1, article_num)
+                        
+                        # Update the article box text with the page-specific number
+                        x0, y0, x1, y1 = region['box']
+                        label = f"Article #{article_num}"
+                        # Draw background for text
+                        text_width, text_height = draw.textlength(label, font=None), 20
+                        draw.rectangle(
+                            [x0, y0, x0 + text_width + 10, y0 + text_height], 
+                            fill=(0, 255, 0, 180)
+                        )
+                        # Draw text
+                        draw.text((x0 + 5, y0), label, fill=(0, 0, 0, 255))
+                    
                     # Convert PIL image to bytes
                     img_bytes = io.BytesIO()
                     viz_img.save(img_bytes, format='PNG')
@@ -105,6 +141,19 @@ class NewspaperArticleSegmenter:
                     rect = fitz.Rect(0, 0, page.rect.width, page.rect.height)
                     page.insert_image(rect, stream=img_bytes.getvalue())
                     
+                    # Add clickable links for each article region
+                    for region in article_regions:
+                        x0, y0, x1, y1 = region['box']
+                        # Convert coordinates to PDF page coordinates
+                        rect = fitz.Rect(x0, y0, x1, y1)
+                        # Create link annotation
+                        link = {
+                            "kind": fitz.LINK_URI,
+                            "uri": region['url'],
+                            "from": rect
+                        }
+                        page.insert_link(link)
+                        
                 except Exception as e:
                     print(f"Error processing page {page_num}: {str(e)}")
                     # Add the page as-is if error occurs
@@ -181,11 +230,15 @@ class NewspaperArticleSegmenter:
             if page_coverage > 0.9:  # If it covers more than 90% of the page
                 continue
 
+            # Generate URL for this article
+            article_url = self._generate_article_url(page.page_number + 1, i + 1)
+
             # Create region dictionary
             region = {
                 'score': 1.0,
                 'label': f'article_{i}',
-                'box': [x0, y0, x1, y1]
+                'box': [x0, y0, x1, y1],
+                'url': article_url
             }
             article_regions.append(region)
             

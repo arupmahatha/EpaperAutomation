@@ -59,7 +59,7 @@ class ArticleExtractor:
                     print(f"Processing page {page_num + 1}/{len(pdf_doc)}")
                     
                     # Create page directory
-                    page_dir = os.path.join(pdf_dir, f"page_{page_num + 1}")
+                    page_dir = os.path.join(pdf_dir, f"page{page_num + 1}")
                     os.makedirs(page_dir, exist_ok=True)
                     
                     # Get the page
@@ -83,7 +83,7 @@ class ArticleExtractor:
                     # Extract and save each article
                     for idx, region in enumerate(article_regions):
                         article_num = idx + 1
-                        article_path = os.path.join(page_dir, f"article_{article_num}.png")
+                        article_path = os.path.join(page_dir, f"article{article_num}.png")
                         
                         # Extract article using PyMuPDF
                         self._extract_region_as_image(page, region, article_path)
