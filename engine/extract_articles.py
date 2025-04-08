@@ -4,6 +4,8 @@ import pdfplumber
 import io
 import shutil
 import sys
+import base64
+import requests
 from article_segmenter import NewspaperArticleSegmenter
 from PIL import Image, ImageDraw
 
@@ -22,10 +24,44 @@ class ArticleExtractor:
         """
         self.output_dir = output_dir
         self.segmenter = NewspaperArticleSegmenter()
+        self.api_url = "https://588dc01637.execute-api.ap-south-1.amazonaws.com/v1/paper-article-upload"
         
         # Create output directory if it doesn't exist
         if not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
+        
+    def _upload_article_to_api(self, image_path, filename):
+        """
+        Upload an article image to the API
+        
+        Args:
+            image_path: Path to the image file
+            filename: Name to use for the uploaded file
+            
+        Returns:
+            dict: API response containing public_url
+        """
+        try:
+            # Read image and convert to base64
+            with open(image_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+            
+            # Prepare request payload
+            payload = {
+                "image": base64_image,
+                "is_base64": True,
+                "filename": filename
+            }
+            
+            # Make API request
+            response = requests.post(self.api_url, json=payload)
+            response.raise_for_status()  # Raise exception for bad status codes
+            
+            return response.json()
+            
+        except Exception as e:
+            print(f"Error uploading {filename}: {str(e)}")
+            return None
         
     def extract_articles_from_pdf(self, pdf_path):
         """
@@ -87,6 +123,15 @@ class ArticleExtractor:
                         
                         # Extract article using PyMuPDF
                         self._extract_region_as_image(page, region, article_path)
+                        
+                        # Upload to API
+                        filename = f"page{page_num + 1}-article{article_num}"
+                        api_response = self._upload_article_to_api(article_path, filename)
+                        
+                        if api_response:
+                            print(f"  Uploaded article #{article_num} to {api_response.get('public_url', 'unknown')}")
+                        else:
+                            print(f"  Failed to upload article #{article_num}")
                         
                         print(f"  Saved article #{article_num} to {article_path}")
         
