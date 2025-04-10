@@ -144,21 +144,28 @@ class ArticleExtractor:
         
         Args:
             page: fitz.Page object
-            region: Dictionary with 'box' coordinates [x0, y0, x1, y1]
+            region: Dictionary with 'box' coordinates [x0, y0, x1, y1] and original_box
             output_path: Path to save the extracted image
         """
-        # Create a rectangle with the region coordinates
-        x0, y0, x1, y1 = region['box']
+        # Use original coordinates for extraction
+        x0, y0, x1, y1 = region.get('original_box', region['box'])
         rect = fitz.Rect(x0, y0, x1, y1)
         
-        # Render the page region to a pixmap
-        # Use a higher zoom factor for better quality
-        zoom = 2.0
+        # Render the page region to a pixmap with high resolution
+        zoom = 3.0  # Higher zoom factor for better quality
         mat = fitz.Matrix(zoom, zoom)
         pix = page.get_pixmap(matrix=mat, clip=rect)
         
-        # Save the pixmap as PNG
-        pix.save(output_path)
+        # Convert to PIL Image for potential post-processing
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        
+        # Enhance image if needed (optional)
+        # from PIL import ImageEnhance
+        # enhancer = ImageEnhance.Sharpness(img)
+        # img = enhancer.enhance(1.2)
+        
+        # Save with high quality
+        img.save(output_path, "PNG", quality=95)
 
 # Example usage
 if __name__ == "__main__":

@@ -180,10 +180,10 @@ class NewspaperArticleSegmenter:
             List of article regions with coordinates
         """
         article_regions = []
-
-        # Debug directory for saving intermediate steps
-        debug_dir = os.path.join(self.temp_dir, "debug")
-        os.makedirs(debug_dir, exist_ok=True)
+        
+        # Get page dimensions and calculate scale factor
+        display_width = 1200  # Target display width
+        scale_factor = display_width / page.width
         
         # Calculate top margin to ignore based on whether it's first page or not
         if is_first_page:
@@ -203,41 +203,47 @@ class NewspaperArticleSegmenter:
         images = page.images
         
         for i, img_obj in enumerate(images):
-            # Get coordinates
-            x0, y0 = img_obj['x0'], img_obj['top']
-            x1 = x0 + img_obj['width']
-            y1 = y0 + img_obj['height']
+            # Get coordinates and scale them
+            x0, y0 = img_obj['x0'] * scale_factor, img_obj['top'] * scale_factor
+            x1 = (img_obj['x0'] + img_obj['width']) * scale_factor
+            y1 = (img_obj['top'] + img_obj['height']) * scale_factor
             
             # Skip regions that are entirely in the top margin
-            if y1 <= top_margin:
+            if y1 <= top_margin * scale_factor:
                 continue
                 
             # For regions that partially overlap with the top margin, adjust them
-            if y0 < top_margin:
-                y0 = top_margin
+            if y0 < top_margin * scale_factor:
+                y0 = top_margin * scale_factor
             
             # Calculate area ratios
             area = (x1 - x0) * (y1 - y0)
-            page_area = page.width * page.height
+            page_area = (page.width * scale_factor) * (page.height * scale_factor)
             area_ratio = area / page_area
             
             # Skip very small regions (likely not articles) and very large regions (likely full page)
             if area_ratio < self.min_area_ratio or area_ratio > self.max_area_ratio:
                 continue
                 
-            # Check if it's almost covering the entire page (indicating it might be the page background)
-            page_coverage = self._calculate_page_coverage([x0, y0, x1, y1], [0, 0, page.width, page.height])
+            # Check if it's almost covering the entire page
+            page_coverage = self._calculate_page_coverage(
+                [x0, y0, x1, y1], 
+                [0, 0, page.width * scale_factor, page.height * scale_factor]
+            )
             if page_coverage > 0.9:  # If it covers more than 90% of the page
                 continue
 
             # Generate URL for this article
             article_url = self._generate_article_url(page.page_number + 1, i + 1)
 
-            # Create region dictionary
+            # Create region dictionary with scaled coordinates
             region = {
                 'score': 1.0,
                 'label': f'article_{i}',
                 'box': [x0, y0, x1, y1],
+                'original_box': [img_obj['x0'], img_obj['top'], 
+                               img_obj['x0'] + img_obj['width'], 
+                               img_obj['top'] + img_obj['height']],
                 'url': article_url
             }
             article_regions.append(region)
@@ -263,16 +269,16 @@ class NewspaperArticleSegmenter:
             x0, y0, x1, y1 = table.bbox
             
             # Skip regions that are entirely in the top margin
-            if y1 <= top_margin:
+            if y1 <= top_margin * scale_factor:
                 continue
                 
             # For regions that partially overlap with the top margin, adjust them
-            if y0 < top_margin:
-                y0 = top_margin
+            if y0 < top_margin * scale_factor:
+                y0 = top_margin * scale_factor
             
             # Calculate area ratios
             area = (x1 - x0) * (y1 - y0)
-            page_area = page.width * page.height
+            page_area = (page.width * scale_factor) * (page.height * scale_factor)
             area_ratio = area / page_area
             
             # Skip very small regions (likely not articles) and very large regions (likely full page)
@@ -280,15 +286,19 @@ class NewspaperArticleSegmenter:
                 continue
                 
             # Check if it's almost covering the entire page
-            page_coverage = self._calculate_page_coverage([x0, y0, x1, y1], [0, 0, page.width, page.height])
+            page_coverage = self._calculate_page_coverage(
+                [x0, y0, x1, y1], 
+                [0, 0, page.width * scale_factor, page.height * scale_factor]
+            )
             if page_coverage > 0.9:  # If it covers more than 90% of the page
                 continue
                 
-            # Create region dictionary
+            # Create region dictionary with scaled coordinates
             region = {
                 'score': 0.9,
                 'label': f'table_article_{i}',
-                'box': [x0, y0, x1, y1]
+                'box': [x0, y0, x1, y1],
+                'original_box': [x0, y0, x1, y1]
             }
             article_regions.append(region)
             
