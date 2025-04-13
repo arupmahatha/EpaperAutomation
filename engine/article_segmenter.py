@@ -22,7 +22,7 @@ class NewspaperArticleSegmenter:
                 max_area_ratio: float = 0.85,
                 first_page_margin_percent: float = 14.5,  # Typically first page has larger header
                 other_pages_margin_percent: float = 8.5,  # Other pages usually have smaller headers
-                base_url: str = "www.andhrajyothi.com/media/epaper-articles"):  # Base URL for article links
+                date: str = None):  # Date in YYYY-MM-DD format
         """
         Initialize the newspaper article segmenter
         
@@ -34,7 +34,7 @@ class NewspaperArticleSegmenter:
                             (prevents entire page from being detected as an article)
             first_page_margin_percent: Percentage of the top of the first page to ignore
             other_pages_margin_percent: Percentage of the top of other pages to ignore
-            base_url: Base URL for generating article links
+            date: Date in YYYY-MM-DD format
         """
         # Create directories if they don't exist
         os.makedirs(output_dir, exist_ok=True)
@@ -46,8 +46,8 @@ class NewspaperArticleSegmenter:
         self.max_area_ratio = max_area_ratio
         self.first_page_margin_percent = first_page_margin_percent
         self.other_pages_margin_percent = other_pages_margin_percent
-        self.base_url = base_url
-        self.current_date = datetime.now().strftime("%Y/%Y%m%d")
+        self.date = date or datetime.now().strftime("%Y-%m-%d")
+        self.s3_base_url = "https://epaper-article-db.s3.ap-south-1.amazonaws.com/epaper-articles"
     
     def _generate_article_url(self, page_num: int, article_num: int) -> str:
         """
@@ -60,7 +60,10 @@ class NewspaperArticleSegmenter:
         Returns:
             Generated URL string
         """
-        return f"https://{self.base_url}/{self.current_date}/page{page_num}-article{article_num}.jpg"
+        # Convert date from YYYY-MM-DD to YYYY/YYYYMMDD format
+        year = self.date[:4]
+        yyyymmdd = self.date.replace("-", "")
+        return f"{self.s3_base_url}/{year}/{yyyymmdd}/page{page_num}-article{article_num}.jpg"
     
     def process_pdf(self, pdf_path: str) -> str:
         """
@@ -180,10 +183,10 @@ class NewspaperArticleSegmenter:
             List of article regions with coordinates
         """
         article_regions = []
-        
-        # Get page dimensions and calculate scale factor
-        display_width = 1200  # Target display width
-        scale_factor = display_width / page.width
+
+        # Debug directory for saving intermediate steps
+        debug_dir = os.path.join(self.temp_dir, "debug")
+        os.makedirs(debug_dir, exist_ok=True)
         
         # Calculate top margin to ignore based on whether it's first page or not
         if is_first_page:
@@ -203,40 +206,37 @@ class NewspaperArticleSegmenter:
         images = page.images
         
         for i, img_obj in enumerate(images):
-            # Get coordinates and scale them
-            x0, y0 = img_obj['x0'] * scale_factor, img_obj['top'] * scale_factor
-            x1 = (img_obj['x0'] + img_obj['width']) * scale_factor
-            y1 = (img_obj['top'] + img_obj['height']) * scale_factor
+            # Get coordinates
+            x0, y0 = img_obj['x0'], img_obj['top']
+            x1 = x0 + img_obj['width']
+            y1 = y0 + img_obj['height']
             
             # Skip regions that are entirely in the top margin
-            if y1 <= top_margin * scale_factor:
+            if y1 <= top_margin:
                 continue
                 
             # For regions that partially overlap with the top margin, adjust them
-            if y0 < top_margin * scale_factor:
-                y0 = top_margin * scale_factor
+            if y0 < top_margin:
+                y0 = top_margin
             
             # Calculate area ratios
             area = (x1 - x0) * (y1 - y0)
-            page_area = (page.width * scale_factor) * (page.height * scale_factor)
+            page_area = page.width * page.height
             area_ratio = area / page_area
             
             # Skip very small regions (likely not articles) and very large regions (likely full page)
             if area_ratio < self.min_area_ratio or area_ratio > self.max_area_ratio:
                 continue
                 
-            # Check if it's almost covering the entire page
-            page_coverage = self._calculate_page_coverage(
-                [x0, y0, x1, y1], 
-                [0, 0, page.width * scale_factor, page.height * scale_factor]
-            )
+            # Check if it's almost covering the entire page (indicating it might be the page background)
+            page_coverage = self._calculate_page_coverage([x0, y0, x1, y1], [0, 0, page.width, page.height])
             if page_coverage > 0.9:  # If it covers more than 90% of the page
                 continue
 
             # Generate URL for this article
             article_url = self._generate_article_url(page.page_number + 1, i + 1)
 
-            # Create region dictionary with scaled coordinates
+            # Create region dictionary
             region = {
                 'score': 1.0,
                 'label': f'article_{i}',
@@ -269,16 +269,16 @@ class NewspaperArticleSegmenter:
             x0, y0, x1, y1 = table.bbox
             
             # Skip regions that are entirely in the top margin
-            if y1 <= top_margin * scale_factor:
+            if y1 <= top_margin:
                 continue
                 
             # For regions that partially overlap with the top margin, adjust them
-            if y0 < top_margin * scale_factor:
-                y0 = top_margin * scale_factor
+            if y0 < top_margin:
+                y0 = top_margin
             
             # Calculate area ratios
             area = (x1 - x0) * (y1 - y0)
-            page_area = (page.width * scale_factor) * (page.height * scale_factor)
+            page_area = page.width * page.height
             area_ratio = area / page_area
             
             # Skip very small regions (likely not articles) and very large regions (likely full page)
@@ -286,19 +286,17 @@ class NewspaperArticleSegmenter:
                 continue
                 
             # Check if it's almost covering the entire page
-            page_coverage = self._calculate_page_coverage(
-                [x0, y0, x1, y1], 
-                [0, 0, page.width * scale_factor, page.height * scale_factor]
-            )
+            page_coverage = self._calculate_page_coverage([x0, y0, x1, y1], [0, 0, page.width, page.height])
             if page_coverage > 0.9:  # If it covers more than 90% of the page
                 continue
                 
-            # Create region dictionary with scaled coordinates
+            # Create region dictionary
             region = {
                 'score': 0.9,
                 'label': f'table_article_{i}',
                 'box': [x0, y0, x1, y1],
-                'original_box': [x0, y0, x1, y1]
+                'original_box': [x0, y0, x1, y1],
+                'url': self._generate_article_url(page.page_number + 1, len(images) + i + 1)
             }
             article_regions.append(region)
             
@@ -358,7 +356,7 @@ if __name__ == "__main__":
     segmenter = NewspaperArticleSegmenter()
     
     # Process a PDF
-    pdf_path = "Sample.pdf"
+    pdf_path = "sample.pdf"
     if os.path.exists(pdf_path):
         output_path = segmenter.process_pdf(pdf_path)
         print(f"Output saved to: {output_path}")

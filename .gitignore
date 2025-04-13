@@ -181,12 +181,3 @@ output/
 
 # Ignore the extracted_articles directory
 extracted_articles/
-
-# Ignore the web_viewer_output directory
-web_viewer_output/
-
-# Ignore the engine/web_viewer_output directory
-engine/web_viewer_output/
-
-# Ignore the uploads directory
-uploads/

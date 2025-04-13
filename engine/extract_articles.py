@@ -8,6 +8,7 @@ import base64
 import requests
 from article_segmenter import NewspaperArticleSegmenter
 from PIL import Image, ImageDraw
+from datetime import datetime
 
 class ArticleExtractor:
     """
@@ -15,28 +16,30 @@ class ArticleExtractor:
     Uses the NewspaperArticleSegmenter to detect article boundaries.
     """
     
-    def __init__(self, output_dir="extracted_articles"):
+    def __init__(self, output_dir="extracted_articles", date=None):
         """
         Initialize the article extractor
         
         Args:
             output_dir: Directory to save extracted article images
+            date: Date in YYYY-MM-DD format
         """
         self.output_dir = output_dir
-        self.segmenter = NewspaperArticleSegmenter()
-        self.api_url = "https://588dc01637.execute-api.ap-south-1.amazonaws.com/v1/paper-article-upload"
+        self.segmenter = NewspaperArticleSegmenter(date=date)
+        self.s3_base_url = "https://epaper-article-db.s3.ap-south-1.amazonaws.com/epaper-articles"
         
         # Create output directory if it doesn't exist
         if not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
         
-    def _upload_article_to_api(self, image_path, filename):
+    def _upload_article_to_api(self, image_path, filename, date):
         """
         Upload an article image to the API
         
         Args:
             image_path: Path to the image file
             filename: Name to use for the uploaded file
+            date: Date of the article in YYYY-MM-DD format
             
         Returns:
             dict: API response containing public_url
@@ -46,29 +49,44 @@ class ArticleExtractor:
             with open(image_path, "rb") as image_file:
                 base64_image = base64.b64encode(image_file.read()).decode('utf-8')
             
+            # Use the same date format as article_segmenter.py
+            year = date[:4]
+            yyyymmdd = date.replace("-", "")
+            
+            # Generate the S3 URL using the same format as article_segmenter.py
+            s3_url = f"{self.s3_base_url}/{year}/{yyyymmdd}/{filename}.jpg"
+            
             # Prepare request payload
             payload = {
                 "image": base64_image,
                 "is_base64": True,
-                "filename": filename
+                "filename": filename,
+                "date": yyyymmdd,
+                "year": year,
+                "s3_path": f"{year}/{yyyymmdd}/{filename}.jpg",
+                "s3_url": s3_url
             }
             
-            # Make API request
-            response = requests.post(self.api_url, json=payload)
+            # Make API request to the same URL pattern
+            response = requests.post(s3_url, json=payload)
             response.raise_for_status()  # Raise exception for bad status codes
             
-            return response.json()
+            # Return both API response and S3 URL
+            api_response = response.json()
+            api_response['s3_url'] = s3_url
+            return api_response
             
         except Exception as e:
             print(f"Error uploading {filename}: {str(e)}")
             return None
         
-    def extract_articles_from_pdf(self, pdf_path):
+    def extract_articles_from_pdf(self, pdf_path, date):
         """
         Extract all articles from a PDF and save them as separate image files
         
         Args:
             pdf_path: Path to the input PDF file
+            date: Date of the newspaper in YYYY-MM-DD format
             
         Returns:
             Directory containing all extracted articles
@@ -126,7 +144,7 @@ class ArticleExtractor:
                         
                         # Upload to API
                         filename = f"page{page_num + 1}-article{article_num}"
-                        api_response = self._upload_article_to_api(article_path, filename)
+                        api_response = self._upload_article_to_api(article_path, filename, date)
                         
                         if api_response:
                             print(f"  Uploaded article #{article_num} to {api_response.get('public_url', 'unknown')}")
@@ -169,22 +187,25 @@ class ArticleExtractor:
 
 # Example usage
 if __name__ == "__main__":
-    pdf_path = "/Users/arup/Documents/EpaperAutomation/Sample.pdf"  # CHANGE THIS PATH
+    pdf_path = "/Users/arup/Documents/EpaperAutomation/sample.pdf"  # CHANGE THIS PATH
     output_dir = "extracted_articles"
+    # Use the same date format as article_segmenter.py
+    date = "2025-04-14"  # This matches the date used in article_segmenter.py
     
     print(f"Processing PDF: {pdf_path}")
+    print(f"Using date: {date}")
     
     # Check if file exists
     if not os.path.exists(pdf_path):
         print(f"Error: PDF file not found at {pdf_path}")
         sys.exit(1)
         
-    # Create extractor
-    extractor = ArticleExtractor(output_dir=output_dir)
+    # Create extractor with the same date as article_segmenter.py
+    extractor = ArticleExtractor(output_dir=output_dir, date=date)
     
     # Process the PDF
     try:
-        output_dir = extractor.extract_articles_from_pdf(pdf_path)
+        output_dir = extractor.extract_articles_from_pdf(pdf_path, date)
         print(f"All articles extracted to: {output_dir}")
     except Exception as e:
         print(f"Error processing PDF: {str(e)}")
