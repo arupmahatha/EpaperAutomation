@@ -60,7 +60,7 @@ class NewspaperArticleSegmenter:
         Returns:
             Generated URL string
         """
-        return f"https://{self.base_url}/{self.current_date}/page{page_num}-article{article_num}.jpg"
+        return f"https://epaper-article-db.s3.ap-south-1.amazonaws.com/epaper-articles/{self.current_date}/page{page_num}-article{article_num}.jpg"
     
     def process_pdf(self, pdf_path: str) -> str:
         """
