@@ -170,14 +170,11 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# Ignore the temp directory
-temp/
-
 # Ignore the Sample_PDFs directory
 Sample_PDFs/
 
-# Ignore the output directory
-output/
+# Ignore the phase_1_output directory
+phase_1_output/
 
-# Ignore the extracted_articles directory
-extracted_articles/
+# Ignore the phase_2_output directory
+phase_2_output/
