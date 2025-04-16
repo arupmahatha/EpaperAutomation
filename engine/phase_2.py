@@ -75,20 +75,10 @@ class ImageTextExtractor:
                 
                 # Prepare the prompt
                 prompt = """
-                Analyze this image (text is in Telugu) and translate to English.
-                Please translate the following to English and provide:
-                1. Headline (if present)
-                2. Subheadline (if present)
-                3. Main text content
-                
-                IMPORTANT: All text must be in English.
-                
-                Format the response as a JSON object with these keys:
-                - headline
-                - subheadline
-                - main_text
-                
-                If any section is not present, set its value to null.
+                Analyze the text in this image (which is in Telugu). 
+                Translate the text into English and format the response as a JSON object with the keys: headline, subheadline, and main_text. 
+                If a section is not present, set its value to null. 
+                Ensure all text in the JSON object is in English.
                 """
                 
                 # Prepare the request payload
