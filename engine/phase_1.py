@@ -1,252 +1,256 @@
 import os
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw
 import fitz  # PyMuPDF
-import pdfplumber
-import io
-import shutil
-import sys
 import base64
 import requests
-from PIL import Image, ImageDraw
+import io
+import pdfplumber
 
-class PDFProcessor:
+def _upload_article_to_api(image_path, filename):
     """
-    Process newspaper PDFs by extracting articles, creating visualizations, and generating analyzed PDFs with clickable links.
-    """
+    Upload an article image to the API
     
-    def __init__(self, output_dir):
-        """
-        Initialize the PDF processor
+    Args:
+        image_path: Path to the image file
+        filename: The filename to be used in the API request
         
-        Args:
-            output_dir: Directory to save processed PDFs and extracted articles
-        """
-        self.output_dir = output_dir
+    Returns:
+        dict: API response containing public_url
+    """
+    try:
+        # Read image and convert to base64
+        with open(image_path, "rb") as image_file:
+            base64_image = base64.b64encode(image_file.read()).decode('utf-8')
         
-        # Create output directory if it doesn't exist
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir, exist_ok=True)
+        # Prepare request payload
+        payload = {
+            "image": base64_image,
+            "is_base64": True,
+            "filename": filename
+        }
         
-    def _upload_article_to_api(self, image_path, filename):
-        """
-        Upload an article image to the API
+        # Make API request
+        response = requests.post("https://588dc01637.execute-api.ap-south-1.amazonaws.com/v1/paper-article-upload", json=payload)
+        response.raise_for_status()
+        return response.json()
         
-        Args:
-            image_path: Path to the image file
-            filename: The filename to be used in the API request
-            
-        Returns:
-            dict: API response containing public_url
-        """
-        try:
-            # Read image and convert to base64
-            with open(image_path, "rb") as image_file:
-                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
-            
-            # Prepare request payload
-            payload = {
-                "image": base64_image,
-                "is_base64": True,
-                "filename": filename
-            }
-            
-            # Make API request
-            response = requests.post("https://588dc01637.execute-api.ap-south-1.amazonaws.com/v1/paper-article-upload", json=payload)
-            response.raise_for_status()
-            return response.json()
-            
-        except Exception as e:
-            print(f"Error uploading article: {str(e)}")
-            return None
-        
-    def extract_articles_from_pdf(self, pdf_path):
-        """
-        Extract all articles from a PDF and save them as separate image files
-        
-        Args:
-            pdf_path: Path to the input PDF file
-            
-        Returns:
-            tuple: (analyzed_pdf_path, article_urls)
-                - analyzed_pdf_path: Path to the analyzed PDF with clickable links
-                - article_urls: Dictionary mapping article numbers to their public URLs
-        """
-        # Get PDF file name (without extension)
-        pdf_filename = os.path.basename(pdf_path)
-        pdf_name = os.path.splitext(pdf_filename)[0]
-        
-        # Create directory structure for this PDF
-        pdf_dir = os.path.join(self.output_dir, pdf_name)
-        
-        # If directory exists, remove it to start fresh
-        if os.path.exists(pdf_dir):
-            shutil.rmtree(pdf_dir)
-            
-        os.makedirs(pdf_dir, exist_ok=True)
-        
-        print(f"Extracting articles from {pdf_filename}...")
-        
-        # Dictionary to store article URLs
-        article_urls = {}
-        
-        # Create a new PDF for the analyzed version
-        analyzed_pdf_path = os.path.join(pdf_dir, f"{pdf_name}_analysed.pdf")
-        
-        # Process each page
-        with fitz.open(pdf_path) as pdf_doc:
-            output_pdf = fitz.open()
-            
-            with pdfplumber.open(pdf_path) as pdf_plumber:
-                for page_num in range(len(pdf_doc)):
-                    print(f"Processing page {page_num + 1}/{len(pdf_doc)}")
-                    
-                    # Create page directory
-                    page_dir = os.path.join(pdf_dir, f"page{page_num + 1}")
-                    os.makedirs(page_dir, exist_ok=True)
-                    
-                    # Get the page
-                    page = pdf_doc[page_num]
-                    page_plumber = pdf_plumber.pages[page_num]
-                    
-                    # Create a PIL draw object for visualization
-                    width = int(page_plumber.width)
-                    height = int(page_plumber.height)
-                    viz_img = Image.new('RGBA', (width, height), (255, 255, 255, 0))
-                    draw = ImageDraw.Draw(viz_img)
-                    
-                    # Calculate top margin to ignore
-                    margin_percent = 14.5 if page_num == 0 else 8.5
-                    top_margin = page_plumber.height * (margin_percent / 100)
-                    
-                    # Get all images from the page
-                    images = page_plumber.images
-                    article_count = 0
-                    
-                    for img_obj in images:
-                        # Get coordinates
-                        x0, y0 = img_obj['x0'], img_obj['top']
-                        x1 = x0 + img_obj['width']
-                        y1 = y0 + img_obj['height']
-                        
-                        # Skip regions in top margin
-                        if y1 <= top_margin:
-                            continue
-                            
-                        # Adjust regions overlapping with top margin
-                        if y0 < top_margin:
-                            y0 = top_margin
-                        
-                        # Calculate area ratio
-                        area = (x1 - x0) * (y1 - y0)
-                        page_area = page_plumber.width * page_plumber.height
-                        area_ratio = area / page_area
-                        
-                        # Skip very small or very large regions
-                        if area_ratio < 0.01 or area_ratio > 0.85:
-                            continue
-                        
-                        article_count += 1
-                        print(f"\nProcessing article #{article_count} on page {page_num + 1}")
-                        
-                        # Extract article as image
-                        article_path = os.path.join(page_dir, f"article{article_count}.png")
-                        print(f"1. Extracting article to {article_path}")
-                        rect = fitz.Rect(x0, y0, x1, y1)
-                        zoom = 3.0
-                        mat = fitz.Matrix(zoom, zoom)
-                        pix = page.get_pixmap(matrix=mat, clip=rect)
-                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                        img.save(article_path, "PNG", quality=95)
-                        
-                        # Upload to API with consistent article numbering
-                        filename = f"page{page_num + 1}-article{article_count}"
-                        api_response = self._upload_article_to_api(article_path, filename)
-                        
-                        if api_response:
-                            public_url = api_response.get('public_url')
-                            article_urls[filename] = public_url
-                            print(f"3. Upload successful! Public URL: {public_url}")
-                            
-                            # Draw green rectangle with some transparency
-                            draw.rectangle([x0, y0, x1, y1], outline=(0, 255, 0, 180), width=3)
-                            
-                            # Add a label in the top-left corner with consistent numbering
-                            label = f"Article #{article_count}"
-                            text_width, text_height = draw.textlength(label, font=None), 20
-                            draw.rectangle(
-                                [x0, y0, x0 + text_width + 10, y0 + text_height], 
-                                fill=(0, 255, 0, 180)
-                            )
-                            draw.text((x0 + 5, y0), label, fill=(0, 0, 0, 255))
-                        else:
-                            print(f"3. Upload failed for article #{article_count}")
-                        
-                        print("---")
-                    
-                    # Convert PIL image to bytes
-                    img_bytes = io.BytesIO()
-                    viz_img.save(img_bytes, format='PNG')
-                    img_bytes.seek(0)
-                    
-                    # Copy original page to output PDF
-                    output_pdf.insert_pdf(pdf_doc, from_page=page_num, to_page=page_num)
-                    page = output_pdf[-1]  # Get last added page
-                    
-                    # Add semi-transparent white overlay
-                    shape = page.new_shape()
-                    shape.draw_rect(page.rect)
-                    shape.finish(color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=0.2)
-                    shape.commit()
-                    
-                    # Insert visualization
-                    rect = fitz.Rect(0, 0, page.rect.width, page.rect.height)
-                    page.insert_image(rect, stream=img_bytes.getvalue())
-                    
-                    # Add clickable links for each article
-                    for i in range(article_count):
-                        filename = f"page{page_num + 1}-article{i + 1}"
-                        if filename in article_urls:
-                            # Get the article region coordinates from the filtered images
-                            # We need to find the corresponding image object for this article
-                            img_index = 0
-                            for img_obj in images:
-                                # Skip regions in top margin
-                                if img_obj['top'] + img_obj['height'] <= top_margin:
-                                    continue
-                                    
-                                # Skip very small or very large regions
-                                area = (img_obj['width']) * (img_obj['height'])
-                                page_area = page_plumber.width * page_plumber.height
-                                area_ratio = area / page_area
-                                if area_ratio < 0.01 or area_ratio > 0.85:
-                                    continue
-                                    
-                                if img_index == i:
-                                    x0, y0 = img_obj['x0'], img_obj['top']
-                                    x1 = x0 + img_obj['width']
-                                    y1 = y0 + img_obj['height']
-                                    
-                                    # Create link
-                                    rect = fitz.Rect(x0, y0, x1, y1)
-                                    link = {
-                                        "kind": fitz.LINK_URI,
-                                        "uri": article_urls[filename],
-                                        "from": rect
-                                    }
-                                    page.insert_link(link)
-                                    break
-                                img_index += 1
-            
-            # Save the analyzed PDF
-            output_pdf.save(analyzed_pdf_path)
-            output_pdf.close()
-        
-        print(f"Extraction complete! All articles saved to: {pdf_dir}")
-        print(f"Analyzed PDF saved to: {analyzed_pdf_path}")
-        return analyzed_pdf_path, article_urls
+    except Exception as e:
+        print(f"Error uploading article: {str(e)}")
+        return None
 
-# Example usage
+def detect_and_extract_articles(pdf_path, output_dir):
+    """
+    Detect articles in a PDF, extract them as images, and upload to API
+    
+    Args:
+        pdf_path: Path to the input PDF file
+        output_dir: Directory to save the visualization and extracted articles
+        
+    Returns:
+        tuple: (analyzed_pdf_path, article_urls)
+            - analyzed_pdf_path: Path to the analyzed PDF with clickable links
+            - article_urls: Dictionary mapping article numbers to their public URLs
+    """
+    # Create output directory
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+    
+    # Get PDF file name (without extension)
+    pdf_filename = os.path.basename(pdf_path)
+    pdf_name = os.path.splitext(pdf_filename)[0]
+    
+    # Create directory for this PDF
+    pdf_dir = os.path.join(output_dir, pdf_name)
+    if os.path.exists(pdf_dir):
+        os.system(f'rm -rf {pdf_dir}')
+    os.makedirs(pdf_dir, exist_ok=True)
+    
+    # Dictionary to store article URLs
+    article_urls = {}
+    
+    # Create a new PDF for the analyzed version
+    analyzed_pdf_path = os.path.join(pdf_dir, f"{pdf_name}_analysed.pdf")
+    
+    # Process each page
+    with fitz.open(pdf_path) as pdf_doc:
+        output_pdf = fitz.open()
+        
+        with pdfplumber.open(pdf_path) as pdf_plumber:
+            for page_num in range(len(pdf_doc)):
+                print(f"Processing page {page_num + 1}/{len(pdf_doc)}")
+                
+                # Create page directory
+                page_dir = os.path.join(pdf_dir, f"page{page_num + 1}")
+                os.makedirs(page_dir, exist_ok=True)
+                
+                # Get the page
+                page = pdf_doc[page_num]
+                page_plumber = pdf_plumber.pages[page_num]
+                pix = page.get_pixmap()
+                
+                # Convert to PIL Image
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                
+                # Convert to OpenCV format
+                cv_img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                
+                # Convert to grayscale
+                gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY)
+                
+                # Calculate top margin to ignore (14.5% of page height)
+                ignore_height = int(pix.height * 0.145)
+                
+                # Create a mask for the top portion
+                mask = np.ones_like(gray) * 255
+                mask[:ignore_height, :] = 0
+                
+                # Apply the mask to ignore top portion
+                masked_gray = cv2.bitwise_and(gray, gray, mask=mask)
+                
+                # Edge detection (Canny)
+                edges = cv2.Canny(masked_gray, 50, 150, apertureSize=3)
+                
+                # Find all contours (curves, polygons, etc.)
+                contours, hierarchy = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                
+                # Filter contours: only closed, significant area, reasonable aspect ratio, outermost, and polygonal (likely article boundaries)
+                closed_contours = []
+                min_area = 30000  # Increase as needed
+                max_area = pix.width * pix.height * 0.9
+                min_perimeter = 500  # Increase as needed
+                if hierarchy is not None:
+                    hierarchy = hierarchy[0]
+                    for idx, cnt in enumerate(contours):
+                        # Only keep outermost contours (no parent)
+                        if hierarchy[idx][3] != -1:
+                            continue
+                        area = cv2.contourArea(cnt)
+                        if area < min_area or area > max_area:
+                            continue
+                        perimeter = cv2.arcLength(cnt, True)
+                        if perimeter < min_perimeter:
+                            continue
+                        x, y, w, h = cv2.boundingRect(cnt)
+                        aspect_ratio = w / float(h)
+                        # Widened aspect ratio range to allow more article shapes
+                        if aspect_ratio < 0.2 or aspect_ratio > 5.0:
+                            continue
+                        closed_contours.append(cnt)
+                
+                # Get bounding rectangles for each contour
+                rects = []
+                for cnt in closed_contours:
+                    x, y, w, h = cv2.boundingRect(cnt)
+                    # Ignore rectangles that are fully or mostly in the ignored top portion
+                    if y < ignore_height:
+                        continue
+                    rects.append((x, y, w, h, cnt))
+
+                # Filter overlapping/contained rectangles (to avoid double-counting articles)
+                filtered_rects = []
+                for i, (x1, y1, w1, h1, cnt1) in enumerate(rects):
+                    overlap = False
+                    for j, (x2, y2, w2, h2, cnt2) in enumerate(rects):
+                        if i == j:
+                            continue
+                        # If rect1 is mostly inside rect2, skip it
+                        if x1 > x2 and y1 > y2 and x1 + w1 < x2 + w2 and y1 + h1 < y2 + h2:
+                            overlap = True
+                            break
+                    if not overlap:
+                        filtered_rects.append((x1, y1, w1, h1, cnt1))
+
+                # Create visualization
+                viz_img = cv_img.copy()
+                
+                # Draw a line to show the ignored top portion
+                cv2.line(viz_img, (0, ignore_height), (viz_img.shape[1], ignore_height), (0, 0, 255), 2)
+                
+                # Process each detected article
+                for idx, (x, y, w, h, cnt) in enumerate(filtered_rects):
+                    # Create mask for the article
+                    mask = np.zeros_like(gray)
+                    cv2.drawContours(mask, [cnt], -1, 255, -1)
+                    
+                    # Extract article image
+                    article_img = cv2.bitwise_and(cv_img, cv_img, mask=mask)
+                    article_img = article_img[y:y+h, x:x+w]
+                    
+                    # Save article image
+                    article_path = os.path.join(page_dir, f"article{idx+1}.png")
+                    cv2.imwrite(article_path, article_img)
+                    print(f"Saved article image to {article_path}")
+                    
+                    # Upload to API
+                    filename = f"page{page_num + 1}-article{idx + 1}"
+                    api_response = _upload_article_to_api(article_path, filename)
+                    
+                    if api_response:
+                        public_url = api_response.get('public_url')
+                        article_urls[filename] = public_url
+                        print(f"Upload successful! Public URL: {public_url}")
+                    else:
+                        print(f"Upload failed for article #{idx + 1}")
+                    
+                    print()  # Add empty line between articles
+                    
+                    # Draw the contour
+                    cv2.drawContours(viz_img, [cnt], -1, (0, 255, 0), 2)
+                    # Get the center of the bounding box for placing the number
+                    cx = x + w // 2
+                    cy = y + h // 2
+                    # Draw a filled circle background for the number
+                    cv2.circle(viz_img, (cx, cy), 20, (0, 255, 0), -1)
+                    # Add the number
+                    cv2.putText(viz_img, str(idx + 1), (cx - 10, cy + 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+                
+                # Save visualization
+                viz_path = os.path.join(pdf_dir, f"page{page_num + 1}_article_boundaries.png")
+                cv2.imwrite(viz_path, viz_img)
+                print(f"Saved visualization to {viz_path}")
+                
+                # Save edge image
+                edge_path = os.path.join(pdf_dir, f"page{page_num + 1}_edges.png")
+                cv2.imwrite(edge_path, edges)
+                print(f"Saved edge image to {edge_path}")
+                
+                print(f"Found {len(filtered_rects)} article boundaries")
+                
+                # Copy original page to output PDF
+                output_pdf.insert_pdf(pdf_doc, from_page=page_num, to_page=page_num)
+                page = output_pdf[-1]
+                
+                # Add semi-transparent white overlay
+                shape = page.new_shape()
+                shape.draw_rect(page.rect)
+                shape.finish(color=(1, 1, 1), fill=(1, 1, 1), fill_opacity=0.2)
+                shape.commit()
+                
+                # Add clickable links for each article
+                for idx, (x, y, w, h, cnt) in enumerate(filtered_rects):
+                    filename = f"page{page_num + 1}-article{idx + 1}"
+                    if filename in article_urls:
+                        # Create link
+                        rect = fitz.Rect(x, y, x + w, y + h)
+                        link = {
+                            "kind": fitz.LINK_URI,
+                            "uri": article_urls[filename],
+                            "from": rect
+                        }
+                        page.insert_link(link)
+        
+        # Save the analyzed PDF
+        output_pdf.save(analyzed_pdf_path)
+        output_pdf.close()
+    
+    print(f"Analyzed PDF saved to: {analyzed_pdf_path}")
+    return analyzed_pdf_path, article_urls
+
 if __name__ == "__main__":
-    pdf_path = "sample.pdf"  # Path to the input PDF file
+    pdf_path = "1.pdf"  # Path to the input PDF file
     output_dir = "phase_1_output"
     
     print(f"Processing PDF: {pdf_path}")
@@ -254,14 +258,11 @@ if __name__ == "__main__":
     # Check if file exists
     if not os.path.exists(pdf_path):
         print(f"Error: PDF file not found at {pdf_path}")
-        sys.exit(1)
-        
-    # Create extractor
-    extractor = PDFProcessor(output_dir=output_dir)
+        exit(1)
     
-    # Process the PDF
     try:
-        analyzed_pdf_path, article_urls = extractor.extract_articles_from_pdf(pdf_path)
+        analyzed_pdf_path, article_urls = detect_and_extract_articles(pdf_path, output_dir)
+        print("Processing complete!")
     except Exception as e:
         print(f"Error processing PDF: {str(e)}")
-        sys.exit(1)
+        exit(1)
