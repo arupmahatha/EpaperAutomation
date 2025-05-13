@@ -40,6 +40,68 @@ def _upload_article_to_api(image_path, filename):
         print(f"Error uploading article: {str(e)}")
         return None
 
+def detect_articles_with_technique(gray, ignore_height, technique, cv_img=None):
+    """
+    Detect article bounding boxes using a specified technique.
+    Returns: list of (x, y, w, h, cnt)
+    """
+    if technique == 'canny':
+        # Edge detection (Canny)
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+    elif technique == 'adaptive':
+        # Adaptive thresholding
+        edges = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                      cv2.THRESH_BINARY_INV, 25, 15)
+    elif technique == 'morphology':
+        # Morphological closing after threshold
+        _, threshed = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+        edges = cv2.morphologyEx(threshed, cv2.MORPH_CLOSE, kernel)
+    else:
+        raise ValueError(f"Unknown technique: {technique}")
+
+    # Find all contours
+    contours, hierarchy = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    closed_contours = []
+    min_area = 30000
+    max_area = gray.shape[1] * gray.shape[0] * 0.9
+    min_perimeter = 500
+    if hierarchy is not None:
+        hierarchy = hierarchy[0]
+        for idx, cnt in enumerate(contours):
+            if hierarchy[idx][3] != -1:
+                continue
+            area = cv2.contourArea(cnt)
+            if area < min_area or area > max_area:
+                continue
+            perimeter = cv2.arcLength(cnt, True)
+            if perimeter < min_perimeter:
+                continue
+            x, y, w, h = cv2.boundingRect(cnt)
+            aspect_ratio = w / float(h)
+            if aspect_ratio < 0.2 or aspect_ratio > 5.0:
+                continue
+            closed_contours.append(cnt)
+    rects = []
+    for cnt in closed_contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        if y < ignore_height:
+            continue
+        rects.append((x, y, w, h, cnt))
+    # Filter overlapping/contained rectangles
+    filtered_rects = []
+    for i, (x1, y1, w1, h1, cnt1) in enumerate(rects):
+        overlap = False
+        for j, (x2, y2, w2, h2, cnt2) in enumerate(rects):
+            if i == j:
+                continue
+            if x1 > x2 and y1 > y2 and x1 + w1 < x2 + w2 and y1 + h1 < y2 + h2:
+                overlap = True
+                break
+        if not overlap:
+            filtered_rects.append((x1, y1, w1, h1, cnt1))
+    return filtered_rects, edges
+
 def detect_and_extract_articles(pdf_path, output_dir):
     """
     Detect articles in a PDF, extract them as images, and upload to API
@@ -109,58 +171,34 @@ def detect_and_extract_articles(pdf_path, output_dir):
                 # Apply the mask to ignore top portion
                 masked_gray = cv2.bitwise_and(gray, gray, mask=mask)
                 
-                # Edge detection (Canny)
-                edges = cv2.Canny(masked_gray, 50, 150, apertureSize=3)
-                
-                # Find all contours (curves, polygons, etc.)
-                contours, hierarchy = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                # Filter contours: only closed, significant area, reasonable aspect ratio, outermost, and polygonal (likely article boundaries)
-                closed_contours = []
-                min_area = 30000  # Increase as needed
-                max_area = pix.width * pix.height * 0.9
-                min_perimeter = 500  # Increase as needed
-                if hierarchy is not None:
-                    hierarchy = hierarchy[0]
-                    for idx, cnt in enumerate(contours):
-                        # Only keep outermost contours (no parent)
-                        if hierarchy[idx][3] != -1:
-                            continue
-                        area = cv2.contourArea(cnt)
-                        if area < min_area or area > max_area:
-                            continue
-                        perimeter = cv2.arcLength(cnt, True)
-                        if perimeter < min_perimeter:
-                            continue
-                        x, y, w, h = cv2.boundingRect(cnt)
-                        aspect_ratio = w / float(h)
-                        # Widened aspect ratio range to allow more article shapes
-                        if aspect_ratio < 0.2 or aspect_ratio > 5.0:
-                            continue
-                        closed_contours.append(cnt)
-                
-                # Get bounding rectangles for each contour
-                rects = []
-                for cnt in closed_contours:
-                    x, y, w, h = cv2.boundingRect(cnt)
-                    # Ignore rectangles that are fully or mostly in the ignored top portion
-                    if y < ignore_height:
-                        continue
-                    rects.append((x, y, w, h, cnt))
+                # Hybrid approach: run both 'adaptive' and 'canny', merge results
+                adaptive_rects, adaptive_edges = detect_articles_with_technique(masked_gray, ignore_height, 'adaptive')
+                canny_rects, canny_edges = detect_articles_with_technique(masked_gray, ignore_height, 'canny')
 
-                # Filter overlapping/contained rectangles (to avoid double-counting articles)
-                filtered_rects = []
-                for i, (x1, y1, w1, h1, cnt1) in enumerate(rects):
-                    overlap = False
-                    for j, (x2, y2, w2, h2, cnt2) in enumerate(rects):
-                        if i == j:
-                            continue
-                        # If rect1 is mostly inside rect2, skip it
-                        if x1 > x2 and y1 > y2 and x1 + w1 < x2 + w2 and y1 + h1 < y2 + h2:
-                            overlap = True
-                            break
-                    if not overlap:
-                        filtered_rects.append((x1, y1, w1, h1, cnt1))
+                # Merge rectangles: if two rectangles overlap significantly, keep only one
+                def rects_overlap(r1, r2, thresh=0.5):
+                    x1, y1, w1, h1, _ = r1
+                    x2, y2, w2, h2, _ = r2
+                    xa = max(x1, x2)
+                    ya = max(y1, y2)
+                    xb = min(x1 + w1, x2 + w2)
+                    yb = min(y1 + h1, y2 + h2)
+                    inter_area = max(0, xb - xa) * max(0, yb - ya)
+                    area1 = w1 * h1
+                    area2 = w2 * h2
+                    if area1 == 0 or area2 == 0:
+                        return False
+                    overlap1 = inter_area / area1
+                    overlap2 = inter_area / area2
+                    return overlap1 > thresh or overlap2 > thresh
+
+                merged_rects = list(adaptive_rects)
+                for c_rect in canny_rects:
+                    if not any(rects_overlap(c_rect, a_rect) for a_rect in merged_rects):
+                        merged_rects.append(c_rect)
+
+                filtered_rects = merged_rects
+                edges = adaptive_edges  # For visualization, use adaptive
 
                 # Create visualization
                 viz_img = cv_img.copy()
@@ -250,7 +288,7 @@ def detect_and_extract_articles(pdf_path, output_dir):
     return analyzed_pdf_path, article_urls
 
 if __name__ == "__main__":
-    pdf_path = "1.pdf"  # Path to the input PDF file
+    pdf_path = "4.pdf"  # Path to the input PDF file
     output_dir = "phase_1_output"
     
     print(f"Processing PDF: {pdf_path}")
