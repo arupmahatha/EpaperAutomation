@@ -14,13 +14,14 @@ class ArticleExtractor:
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir, exist_ok=True)
 
-    def _upload_article_to_api(self, image_path, filename):
+    def _upload_article_to_api(self, image_path, filename, pdf_name):
         """
         Upload an article image to the API
         
         Args:
             image_path: Path to the image file
             filename: The filename to be used in the API request
+            pdf_name: The name of the PDF file
             
         Returns:
             dict: API response containing public_url
@@ -31,10 +32,11 @@ class ArticleExtractor:
                 base64_image = base64.b64encode(image_file.read()).decode('utf-8')
             
             # Prepare request payload
+            api_filename = f"{pdf_name}-{filename}"
             payload = {
                 "image": base64_image,
                 "is_base64": True,
-                "filename": filename
+                "filename": api_filename
             }
             
             # Make API request
@@ -228,11 +230,11 @@ class ArticleExtractor:
                         
                         # Upload to API
                         filename = f"page{page_num + 1}-article{idx + 1}"
-                        api_response = self._upload_article_to_api(article_path, filename)
+                        api_response = self._upload_article_to_api(article_path, filename, pdf_name)
                         
                         if api_response:
                             public_url = api_response.get('public_url')
-                            article_urls[filename] = public_url
+                            article_urls[f"{pdf_name}-{filename}"] = public_url
                             print(f"Upload successful! Public URL: {public_url}")
                         else:
                             print(f"Upload failed for article #{idx + 1}")
@@ -275,12 +277,12 @@ class ArticleExtractor:
                     # Add clickable links for each article
                     for idx, (x, y, w, h, cnt) in enumerate(filtered_rects):
                         filename = f"page{page_num + 1}-article{idx + 1}"
-                        if filename in article_urls:
+                        if f"{pdf_name}-{filename}" in article_urls:
                             # Create link
                             rect = fitz.Rect(x, y, x + w, y + h)
                             link = {
                                 "kind": fitz.LINK_URI,
-                                "uri": article_urls[filename],
+                                "uri": article_urls[f"{pdf_name}-{filename}"],
                                 "from": rect
                             }
                             page.insert_link(link)
