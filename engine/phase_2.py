@@ -200,7 +200,7 @@ class ImageTextExtractor:
 # Example usage:
 if __name__ == "__main__":
     # Specify your input folder path here
-    input_folder = "/Users/arup/Documents/EpaperAutomation/phase_1_output/sample"  # Change this to your desired folder path
+    input_folder = "/Users/arup/Documents/EpaperAutomation/phase_1_output/6"  # Change this to your desired folder path
     
     extractor = ImageTextExtractor()
-    extractor.process_folder(input_folder) 
+    extractor.process_folder(input_folder)
